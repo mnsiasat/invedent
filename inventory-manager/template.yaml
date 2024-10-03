@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  inventory-manager
+
+  Sample SAM Template for inventory-manager
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+
+    Tracing: Active
+    # You can add LoggingConfig parameters such as the Logformat, Log Group, and SystemLogLevel or ApplicationLogLevel. Learn more here https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html#sam-function-loggingconfig.
+    LoggingConfig:
+      LogFormat: JSON
+  Api:
+    TracingEnabled: true
+
+
+Resources:
+  # Creates an HTTP API endpoint
+  InventoryHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefinitionBody:
+        'Fn::Transform':
+          Name: 'AWS::Include'
+          Parameters:
+            Location: './api.yaml'
+
+  # Create the role for API Gateway access to EventBridge
+  InvedentHttpApiRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "apigateway.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: ApiDirectWriteEventBridge
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              Action:
+                - events:PutEvents
+              Effect: Allow
+              Resource:
+                - !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+
+  UpdateInventoryFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Handler: app.handler.handleUpdate
+      Runtime: nodejs20.x
+      CodeUri: .
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints:
+          - app.ts
+        External:
+          - "aws-sdk"
+
+  UpdateInventoryInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref UpdateInventoryFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt UpdateInventoryEventRule.Arn
+
+  UpdateInventoryEventRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: "Update Inventory"
+      EventPattern:
+        source:
+          - custom.inventoryManager
+        detail-type:
+          - inventory
+      Targets:
+        - Arn: !GetAtt UpdateInventoryFunction.Arn
+          Id: "RuleId"
+
+
+Outputs:
+  ApiEndpoint:
+    Description: "HTTP API endpoint URL"
+    Value: !Sub "https://${InventoryHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
